@@ -4,17 +4,11 @@
     "slug": "cuegoblin",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/cuegoblin-icon.png",
     "scheme": "cuegoblin",
     "userInterfaceStyle": "light",
     "backgroundColor": "#FBF4E6",
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#FBF4E6",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
       "predictiveBackGestureEnabled": false
     },
     "web": {
