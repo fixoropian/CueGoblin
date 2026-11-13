@@ -100,6 +100,21 @@ export async function loadItems(): Promise<LoadResult> {
  * alone so nothing is silently discarded.
  */
 export async function saveItems(items: Item[]): Promise<SaveResult> {
+  // AsyncStorage does not guarantee that overlapping setItem calls finish in
+  // call order. Without this queue, an older write that completes last can
+  // replace a newer snapshot on disk. Chaining writes keeps the last value
+  // requested by the app as the final value stored.
+  const write = pendingWrite.then(() => writeItems(items));
+  pendingWrite = write.then(
+    () => undefined,
+    () => undefined,
+  );
+  return write;
+}
+
+let pendingWrite: Promise<void> = Promise.resolve();
+
+async function writeItems(items: Item[]): Promise<SaveResult> {
   try {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
     return { ok: true };
