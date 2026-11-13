@@ -12,9 +12,11 @@ import { ITEM_KINDS, KIND_LABEL, type ItemKind } from '@/types';
 type Props = {
   value: ItemKind;
   onChange: (kind: ItemKind) => void;
+  /** True while the saved items are still being read. */
+  disabled?: boolean;
 };
 
-export function KindPicker({ value, onChange }: Props) {
+export function KindPicker({ value, onChange, disabled = false }: Props) {
   return (
     <View style={styles.row}>
       {ITEM_KINDS.map((kind) => {
@@ -23,14 +25,16 @@ export function KindPicker({ value, onChange }: Props) {
           <Pressable
             key={kind}
             onPress={() => onChange(kind)}
+            disabled={disabled}
             hitSlop={6}
             accessibilityRole="button"
-            accessibilityState={{ selected }}
+            accessibilityState={{ selected, disabled }}
             accessibilityLabel={`Kind: ${KIND_LABEL[kind]}`}
             style={({ pressed }) => [
               styles.pill,
               selected && styles.pillSelected,
               pressed && !selected && styles.pillPressed,
+              disabled && styles.pillDisabled,
             ]}>
             <Text style={[styles.label, selected && styles.labelSelected]}>
               {KIND_LABEL[kind]}
@@ -61,6 +65,9 @@ const styles = StyleSheet.create({
   pillSelected: {
     backgroundColor: colors.lime,
     borderColor: colors.lime,
+  },
+  pillDisabled: {
+    opacity: 0.5,
   },
   label: {
     ...typography.meta,

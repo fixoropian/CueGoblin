@@ -29,13 +29,13 @@ export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { items, hydrated, updateItem, removeItem } = useItems();
+  const { items, isReady, updateItem, removeItem } = useItems();
 
   const item = items.find((entry) => entry.id === id);
 
-  // Storage is still loading: show the page background, not a premature
-  // "deleted" message.
-  if (!hydrated) {
+  // Storage is still loading (or failed): show the page background, not a
+  // premature "deleted" message.
+  if (!isReady) {
     return <View style={styles.screen} />;
   }
 

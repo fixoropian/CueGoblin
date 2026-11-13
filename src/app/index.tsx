@@ -4,6 +4,11 @@
  * Filtering happens in memory on every render. With a personal list of hundreds
  * of items that is instant, and it avoids inventing a query layer before it is
  * needed.
+ *
+ * The screen's job during startup is to wait. The capture bar is disabled until
+ * the saved list has been read successfully, because adding an item while the
+ * read is still in flight would let the first write save a list that is missing
+ * everything still on its way in.
  */
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
@@ -22,6 +27,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CaptureBar } from '@/components/CaptureBar';
 import { EmptyState } from '@/components/EmptyState';
 import { ItemRow } from '@/components/ItemRow';
+import { ProblemNotice } from '@/components/ProblemNotice';
 import { useItems } from '@/store/items';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ITEM_KINDS, KIND_LABEL_PLURAL, type ItemKind } from '@/types';
@@ -55,7 +61,17 @@ const EMPTY_COPY: Record<Filter, { title: string; body: string }> = {
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { items, hydrated, addItem, toggleItemDone } = useItems();
+  const {
+    items,
+    isReady,
+    isLoading,
+    loadError,
+    saveError,
+    retryLoad,
+    retrySave,
+    addItem,
+    toggleItemDone,
+  } = useItems();
   const [filter, setFilter] = useState<Filter>('all');
 
   const visibleItems = useMemo(
@@ -85,7 +101,29 @@ export default function HomeScreen() {
               <Text style={styles.tagline}>Out of your head, into here.</Text>
             </View>
 
-            <CaptureBar onAdd={addItem} />
+            {loadError ? (
+              <ProblemNotice
+                title="Could not load your items"
+                message={`${loadError} Nothing has been changed or overwritten. Try reading them again.`}
+                actionLabel="Try again"
+                onAction={retryLoad}
+              />
+            ) : null}
+
+            {saveError ? (
+              <ProblemNotice
+                title="Could not save your changes"
+                message={`${saveError} Your items are still shown here, but the last change is not stored on this device yet.`}
+                actionLabel="Try again"
+                onAction={retrySave}
+              />
+            ) : null}
+
+            <CaptureBar onAdd={addItem} disabled={!isReady} />
+
+            {isLoading ? (
+              <Text style={styles.loadingHint}>Getting your saved items…</Text>
+            ) : null}
 
             <ScrollView
               horizontal
@@ -117,9 +155,10 @@ export default function HomeScreen() {
           />
         )}
         ListEmptyComponent={
-          // Avoid flashing "nothing here" while storage is still being read.
+          // Avoid flashing "nothing here" while storage is still being read, and
+          // do not claim the list is empty when the read failed.
           // `undefined` (not null) is what FlatList accepts for "render nothing".
-          hydrated ? <EmptyState title={emptyCopy.title} body={emptyCopy.body} /> : undefined
+          isReady ? <EmptyState title={emptyCopy.title} body={emptyCopy.body} /> : undefined
         }
       />
     </KeyboardAvoidingView>
@@ -149,6 +188,10 @@ const styles = StyleSheet.create({
   tagline: {
     ...typography.hint,
     marginTop: 2,
+  },
+  loadingHint: {
+    ...typography.hint,
+    marginTop: -spacing.sm,
   },
   filters: {
     gap: spacing.sm,
