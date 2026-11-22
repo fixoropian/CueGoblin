@@ -31,7 +31,7 @@ import { loadItems, saveItems } from '@/storage/items';
 import type { Item, ItemKind } from '@/types';
 
 /** Fields an edit screen is allowed to change. */
-export type ItemChanges = Partial<Pick<Item, 'text' | 'kind' | 'done'>>;
+export type ItemChanges = Partial<Pick<Item, 'text' | 'kind' | 'done' | 'reminderAt'>>;
 
 /**
  * Where the app is in the read-then-write cycle.

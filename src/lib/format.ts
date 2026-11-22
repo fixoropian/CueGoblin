@@ -6,6 +6,16 @@ const DAY = 24 * HOUR;
  * Turns an epoch timestamp into "just now", "12 min ago", "yesterday"...
  * Older items fall back to a short date so the list stays readable.
  */
+export function formatReminderTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 export function formatRelativeTime(timestamp: number, now: number = Date.now()): string {
   const elapsed = now - timestamp;
 

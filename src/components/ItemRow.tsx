@@ -7,7 +7,7 @@
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { formatRelativeTime } from '@/lib/format';
+import { formatRelativeTime, formatReminderTime } from '@/lib/format';
 import { cardShadow, colors, radius, spacing, typography } from '@/theme';
 import { KIND_LABEL, type Item } from '@/types';
 
@@ -47,6 +47,11 @@ export function ItemRow({ item, onPress, onToggle }: Props) {
         <Text style={styles.meta}>
           {KIND_LABEL[item.kind]} · {formatRelativeTime(item.updatedAt)}
         </Text>
+        {item.reminderAt ? (
+          <Text style={styles.reminderMeta}>
+            Reminder · {formatReminderTime(item.reminderAt)}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -107,5 +112,9 @@ const styles = StyleSheet.create({
   },
   meta: {
     ...typography.meta,
+  },
+  reminderMeta: {
+    ...typography.meta,
+    color: colors.plumMuted,
   },
 });
