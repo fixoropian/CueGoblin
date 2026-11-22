@@ -9,7 +9,7 @@ import DateTimePicker, {
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -41,6 +41,10 @@ export default function ItemScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { items, isReady, updateItem, removeItem } = useItems();
+
+  // The save currently scheduling a reminder, if any. Deleting the item aborts
+  // it so a slow notification call cannot queue an alert after the item is gone.
+  const reminderSave = useRef<AbortController | null>(null);
 
   const item = items.find((entry) => entry.id === id);
 
@@ -77,6 +81,7 @@ export default function ItemScreen() {
 
         const reminderAt = changes.reminderAt ?? null;
         if (reminderAt === null) {
+          reminderSave.current = null;
           await cancelItemReminder(item.id);
           return null;
         }
@@ -87,11 +92,20 @@ export default function ItemScreen() {
           return null;
         }
 
-        return scheduleItemReminder({
-          itemId: item.id,
-          text: changes.text ?? item.text,
-          reminderAt,
-        });
+        const controller = new AbortController();
+        reminderSave.current = controller;
+        try {
+          return await scheduleItemReminder({
+            itemId: item.id,
+            text: changes.text ?? item.text,
+            reminderAt,
+            signal: controller.signal,
+          });
+        } finally {
+          if (reminderSave.current === controller) {
+            reminderSave.current = null;
+          }
+        }
       }}
       onDelete={() => {
         Alert.alert('Delete this item?', 'This cannot be undone.', [
@@ -100,6 +114,10 @@ export default function ItemScreen() {
             text: 'Delete',
             style: 'destructive',
             onPress: () => {
+              // Abandon an in-flight reminder save before the item disappears,
+              // so it cannot schedule an alert for a deleted item.
+              reminderSave.current?.abort();
+              reminderSave.current = null;
               removeItem(item.id);
               void cancelItemReminder(item.id);
               router.back();
@@ -223,6 +241,10 @@ function ItemEditor({ item, topInset, bottomInset, onSave, onDelete, onClose }: 
         onClose();
         return;
       }
+
+      // The item was deleted while this save was still running. The delete flow
+      // already closed this screen and removed any queued alert.
+      if (result.cancelled) return;
 
       // The item and date are already saved. Keep this screen open so the
       // separate stage results (and full stack) remain available.

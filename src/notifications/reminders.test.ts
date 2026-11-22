@@ -277,6 +277,102 @@ describe('scheduleItemReminder', () => {
     expect(result.steps[4].error?.stack).toContain('AlarmManager exploded');
   });
 
+  it('keeps the queued reminder when the replacement fails to schedule', async () => {
+    const harness = createApi({
+      scheduleNotificationAsync: vi.fn(async () => {
+        throw new Error('AlarmManager rejected the request');
+      }),
+    });
+    const existing = { identifier: 'cuegoblin-reminder-item-123' } as NotificationRequest;
+    harness.scheduled.set(existing.identifier, existing);
+
+    const result = await scheduleItemReminder({ ...input, api: harness.api });
+
+    expect(result.ok).toBe(false);
+    expect(result.cancelled).toBeUndefined();
+    expect(result.steps[4]).toMatchObject({
+      stage: 'schedule',
+      status: 'failed',
+      error: { message: 'AlarmManager rejected the request' },
+    });
+    expect(harness.mockApi.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(harness.scheduled.get(existing.identifier)).toBe(existing);
+  });
+
+  it('replaces a queued reminder by scheduling the new one, never by cancelling first', async () => {
+    const harness = createApi();
+
+    const first = await scheduleItemReminder({ ...input, api: harness.api });
+    expect(first.ok).toBe(true);
+
+    const second = await scheduleItemReminder({
+      ...input,
+      reminderAt: REMINDER_AT + 60 * 60 * 1000,
+      api: harness.api,
+    });
+
+    expect(second.ok).toBe(true);
+    expect(harness.mockApi.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+    expect(harness.scheduled.size).toBe(1);
+    const queued = harness.scheduled.get('cuegoblin-reminder-item-123');
+    expect(queued).toBeDefined();
+    const trigger = (queued as unknown as { trigger: { date: Date } }).trigger;
+    expect(trigger.date.getTime()).toBe(REMINDER_AT + 60 * 60 * 1000);
+  });
+
+  it('does not schedule anything when the item is deleted before scheduling starts', async () => {
+    const harness = createApi();
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await scheduleItemReminder({
+      ...input,
+      api: harness.api,
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ ok: false, cancelled: true });
+    expect(result.steps[4]).toMatchObject({ stage: 'schedule', status: 'skipped' });
+    expect(result.steps[4].detail).toContain('item was deleted');
+    expect(harness.mockApi.scheduleNotificationAsync).not.toHaveBeenCalled();
+    expect(harness.mockApi.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  it('removes the request that landed when its item was deleted mid-schedule', async () => {
+    let finishScheduling: (() => void) | undefined;
+    const harness = createApi({
+      scheduleNotificationAsync: vi.fn((request: { identifier?: string }) => {
+        const identifier = request.identifier ?? 'generated';
+        harness.scheduled.set(identifier, request as unknown as NotificationRequest);
+        return new Promise<string>((resolve) => {
+          finishScheduling = () => resolve(identifier);
+        });
+      }),
+    });
+    const controller = new AbortController();
+
+    const pending = scheduleItemReminder({
+      ...input,
+      api: harness.api,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() =>
+      expect(harness.mockApi.scheduleNotificationAsync).toHaveBeenCalledTimes(1),
+    );
+
+    controller.abort();
+    finishScheduling?.();
+
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: false, cancelled: true });
+    expect(result.steps[4]).toMatchObject({ stage: 'schedule', status: 'skipped' });
+    expect(harness.mockApi.cancelScheduledNotificationAsync).toHaveBeenCalledWith(
+      'cuegoblin-reminder-item-123',
+    );
+    expect(harness.scheduled.size).toBe(0);
+  });
+
   it('rejects a reminder in the past without scheduling it', async () => {
     const harness = createApi();
 

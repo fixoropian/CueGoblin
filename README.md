@@ -4,14 +4,15 @@ CueGoblin is an open-source quick-capture app for thoughts and everyday tasks. S
 
 Built with React Native, Expo and TypeScript.
 
-## What works today (milestone 1)
+## What works today
 
 - **Fast capture** — type in the box at the top, pick Note / Task / Shopping, tap Add.
 - **Browse** — filter the list by All, Notes, Tasks or Shopping.
 - **Open and edit** — change the text, change the kind, tick a task off, or delete it (with a confirmation).
+- **Reminders** — pick a date and time on an item and CueGoblin schedules a local notification on the phone (see [Reminders need a development build](#reminders-need-a-development-build-not-expo-go)).
 - **Offline first** — everything is saved on the device. No account, no network, no server.
 
-Not built yet, and intentionally out of scope for now: voice capture, photos, reminders/notifications, search, backup and restore, offline transcription, AI, and any backend or analytics.
+Not built yet, and intentionally out of scope for now: voice capture, photos, search, backup and restore, offline transcription, AI, and any backend or analytics.
 
 ## Run it
 
@@ -30,6 +31,21 @@ Then scan the QR code that appears in the terminal:
 Your phone and computer must be on the same Wi-Fi. If your network isolates devices, run `npx expo start --tunnel` instead.
 
 While the dev server runs, saving a file reloads the app on your phone automatically. Press `w` in the terminal to try it in a browser as well.
+
+### Reminders need a development build, not Expo Go
+
+Capture, browsing, editing and deleting work in Expo Go. **Reminders do not:** they need a development build of CueGoblin, because Expo Go is its own native app and does not use this project's notification configuration. Local reminders in Expo Go were never tested here, so do not rely on them.
+
+With an Android device or emulator connected (Android Studio installed):
+
+```bash
+npx expo run:android
+npx expo start --dev-client
+```
+
+On macOS with Xcode, use `npx expo run:ios` and then the same `npx expo start --dev-client`. The first build installs a CueGoblin app on the device; later JS changes still reload from the dev server.
+
+Reminders have been checked on Android 15 (Samsung Galaxy A15). iOS reminder delivery has not been tested yet. Android may deliver a reminder a little late when the phone is in deep battery optimisation, and the notification permission prompt only appears once per install — if reminders stay silent, open Settings > Apps > CueGoblin > Notifications.
 
 Useful checks:
 
@@ -50,6 +66,7 @@ src/components/     CaptureBar, ItemRow, KindPicker, EmptyState
 src/store/items.tsx in-memory items + every mutation, persisted on change
 src/storage/items.ts AsyncStorage read/write (the only storage-aware file)
 src/lib/            id generation and relative-time formatting
+src/notifications/  local reminder scheduling, permissions and Android channel
 src/types.ts        the Item type and the three kinds
 src/theme.ts        colours, spacing, radii, type styles
 ```
@@ -69,7 +86,8 @@ Storage is app-private but **not encrypted**, so it is fine for notes and shoppi
 ## Roadmap
 
 - Milestone 1 — text capture, list, edit, organise (this release)
-- Later — reminders/notifications, voice capture, photos, search
+- Reminders — one local notification per item (added after milestone 1)
+- Later — voice capture, photos, search
 - Later — backup and restore, offline transcription
 - Optional — AI tidy-up/summarising with the user's own provider key
 

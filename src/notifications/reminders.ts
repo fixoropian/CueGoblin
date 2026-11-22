@@ -36,6 +36,11 @@ export type ReminderStep = {
 export type ReminderAttempt = {
   ok: boolean;
   identifier?: string;
+  /**
+   * True when the save was abandoned because its item was deleted while the
+   * reminder was being set up. Nothing is left queued for that item.
+   */
+  cancelled?: boolean;
   steps: ReminderStep[];
 };
 
@@ -118,6 +123,21 @@ export function reminderNotificationId(itemId: string): string {
   return `cuegoblin-reminder-${itemId}`;
 }
 
+/**
+ * Cancels one identifier without throwing. Cancelling is only ever a cleanup
+ * step here: a failure is logged and leaves the rest of the flow alone.
+ */
+async function cancelQuietly(api: NotificationsApi, identifier: string): Promise<void> {
+  try {
+    await api.cancelScheduledNotificationAsync(identifier);
+  } catch (error) {
+    const info = logStageError('schedule', error);
+    console.warn(
+      `[CueGoblin reminders][schedule] Could not cancel reminder ${identifier}: ${info.message}`,
+    );
+  }
+}
+
 function isGranted(
   response: Notifications.NotificationPermissionsStatus,
   api: NotificationsApi,
@@ -143,8 +163,14 @@ function permissionDetail(response: Notifications.NotificationPermissionsStatus)
  * Schedules one item reminder. `reminderAt` is epoch milliseconds.
  *
  * The item text is copied into the notification body. The identifier is stable
- * per item, so rescheduling replaces the previous request instead of leaving
- * duplicate alerts behind.
+ * per item: scheduling with it replaces that item's previous queued request, so
+ * no pre-emptive cancel is needed and a failed replacement leaves the old
+ * reminder in place.
+ *
+ * `signal` lets the caller abandon a save (for example because the item was
+ * deleted while this was running). If it aborts before the native schedule
+ * call, nothing is queued; if it aborts during that call, the request that just
+ * landed is removed again.
  */
 export async function scheduleItemReminder(options: {
   itemId: string;
@@ -153,6 +179,7 @@ export async function scheduleItemReminder(options: {
   now?: number;
   platform?: string;
   api?: NotificationsApi;
+  signal?: AbortSignal;
 }): Promise<ReminderAttempt> {
   const {
     itemId,
@@ -161,6 +188,7 @@ export async function scheduleItemReminder(options: {
     now = Date.now(),
     platform = Platform.OS,
     api = Notifications,
+    signal,
   } = options;
 
   const steps: ReminderStep[] = [];
@@ -330,6 +358,16 @@ export async function scheduleItemReminder(options: {
 
   // 5. Schedule. Date validation and native scheduling belong to this one stage.
   const identifier = reminderNotificationId(itemId);
+  const abandon = (detail: string): ReminderAttempt => {
+    add({
+      stage: 'schedule',
+      label: REMINDER_STAGE_LABELS.schedule,
+      status: 'skipped',
+      detail,
+    });
+    return { ok: false, cancelled: true, steps };
+  };
+
   try {
     if (!Number.isFinite(reminderAt) || reminderAt <= 0) {
       throw new RangeError(`Invalid reminder timestamp: ${String(reminderAt)}`);
@@ -340,10 +378,16 @@ export async function scheduleItemReminder(options: {
       );
     }
 
-    // A previous reminder for this item may still be queued. Cancel it first so
-    // changing a saved reminder cannot leave two alerts behind.
-    await api.cancelScheduledNotificationAsync(identifier);
+    if (signal?.aborted) {
+      return abandon(
+        'Not scheduled: the item was deleted while this save was still in progress.',
+      );
+    }
 
+    // Scheduling with the item's stable identifier replaces that item's
+    // previous request in the OS queue, so the old reminder is only gone once
+    // the replacement exists. There is deliberately no cancel-before-schedule:
+    // if this call fails, the reminder that was already queued stays put.
     const scheduledId = await api.scheduleNotificationAsync({
       identifier,
       content: {
@@ -359,12 +403,29 @@ export async function scheduleItemReminder(options: {
       },
     });
 
+    // Deleting the item can happen while the native call is in flight. Remove
+    // the request that just landed rather than leave an alert for a gone item.
+    if (signal?.aborted) {
+      await cancelQuietly(api, scheduledId);
+      return abandon(
+        'Scheduled and then removed again: the item was deleted while this save was still in progress.',
+      );
+    }
+
     const all = await api.getAllScheduledNotificationsAsync();
     const nativeRequest = all.find((request) => request.identifier === scheduledId);
     if (!nativeRequest) {
       throw new Error(
         `scheduleNotificationAsync resolved with "${scheduledId}", but that identifier was not present in getAllScheduledNotificationsAsync().`,
       );
+    }
+
+    // The replacement is confirmed queued, so a request left under a different
+    // identifier for this item can safely go. Nothing is cancelled before this
+    // point, which is what keeps a failed replacement from dropping a working
+    // reminder.
+    if (scheduledId !== identifier) {
+      await cancelQuietly(api, identifier);
     }
 
     const channelLabel =
@@ -396,12 +457,5 @@ export async function cancelItemReminder(
   itemId: string,
   api: NotificationsApi = Notifications,
 ): Promise<void> {
-  try {
-    await api.cancelScheduledNotificationAsync(reminderNotificationId(itemId));
-  } catch (error) {
-    const info = logStageError('schedule', error);
-    console.warn(
-      `[CueGoblin reminders][schedule] Could not cancel reminder ${reminderNotificationId(itemId)}: ${info.message}`,
-    );
-  }
+  await cancelQuietly(api, reminderNotificationId(itemId));
 }
