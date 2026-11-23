@@ -61,7 +61,8 @@ type Action =
   | { type: 'added'; item: Item }
   | { type: 'updated'; id: string; changes: ItemChanges; updatedAt: number }
   | { type: 'toggled'; id: string; updatedAt: number }
-  | { type: 'removed'; id: string };
+  | { type: 'removed'; id: string }
+  | { type: 'replaced'; items: Item[] };
 
 const INITIAL_STATE: State = {
   items: [],
@@ -116,6 +117,11 @@ function reducer(state: State, action: Action): State {
     case 'removed':
       return { ...state, items: state.items.filter((item) => item.id !== action.id) };
 
+    case 'replaced':
+      // Only dispatched after the restored list has been written successfully,
+      // so memory never shows items that are not on disk.
+      return { ...state, items: action.items, saveError: null };
+
     default:
       return state;
   }
@@ -137,6 +143,11 @@ type ItemsContextValue = {
   updateItem: (id: string, changes: ItemChanges) => void;
   toggleItemDone: (id: string) => void;
   removeItem: (id: string) => void;
+  /**
+   * Replaces the whole list (restore). Resolves only once the new list is on
+   * disk, so the caller can tell a real restore from a failed one.
+   */
+  replaceAllItems: (items: Item[]) => Promise<{ ok: true } | { ok: false; message: string }>;
 };
 
 const ItemsContext = createContext<ItemsContextValue | null>(null);
@@ -227,6 +238,29 @@ export function ItemsProvider({ children }: { children: ReactNode }) {
     });
   }, [state.items]);
 
+  // Restore replaces the list wholesale. Writing first and dispatching second
+  // keeps the two in step: a failed write leaves the old list in memory and on
+  // disk, which is what lets the restore screen say "nothing changed".
+  const replaceAllItems = useCallback(
+    async (items: Item[]): Promise<{ ok: true } | { ok: false; message: string }> => {
+      if (state.loadStatus !== 'ready') {
+        return {
+          ok: false,
+          message:
+            'Your saved items have not been read yet, so restoring now could overwrite them. Try again once the list has loaded.',
+        };
+      }
+
+      const result = await saveItems(items);
+      if (!result.ok) return result;
+
+      loadedSnapshotRef.current = items;
+      dispatch({ type: 'replaced', items });
+      return { ok: true };
+    },
+    [state.loadStatus],
+  );
+
   const actions = useMemo(
     () => ({
       addItem: (text: string, kind: ItemKind) => {
@@ -265,9 +299,19 @@ export function ItemsProvider({ children }: { children: ReactNode }) {
       saveError: state.saveError,
       retryLoad,
       retrySave,
+      replaceAllItems,
       ...actions,
     }),
-    [state.items, state.loadStatus, state.loadError, state.saveError, retryLoad, retrySave, actions],
+    [
+      state.items,
+      state.loadStatus,
+      state.loadError,
+      state.saveError,
+      retryLoad,
+      retrySave,
+      replaceAllItems,
+      actions,
+    ],
   );
 
   return <ItemsContext.Provider value={value}>{children}</ItemsContext.Provider>;

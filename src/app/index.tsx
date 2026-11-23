@@ -96,9 +96,20 @@ export default function HomeScreen() {
         ItemSeparatorComponent={Separator}
         ListHeaderComponent={
           <View style={styles.header}>
-            <View>
-              <Text style={styles.brand}>CueGoblin</Text>
-              <Text style={styles.tagline}>Out of your head, into here.</Text>
+            <View style={styles.headerTop}>
+              <View>
+                <Text style={styles.brand}>CueGoblin</Text>
+                <Text style={styles.tagline}>Out of your head, into here.</Text>
+              </View>
+
+              <Pressable
+                onPress={() => router.push('/backup')}
+                accessibilityRole="button"
+                accessibilityLabel="Backup and restore"
+                hitSlop={8}
+                style={({ pressed }) => [styles.backupLink, pressed && styles.backupLinkPressed]}>
+                <Text style={styles.backupLinkLabel}>Backup</Text>
+              </Pressable>
             </View>
 
             {loadError ? (
@@ -181,6 +192,27 @@ const styles = StyleSheet.create({
   header: {
     gap: spacing.lg,
     paddingBottom: spacing.lg,
+  },
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  backupLink: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.line,
+  },
+  backupLinkPressed: {
+    backgroundColor: colors.lime,
+    borderColor: colors.lime,
+  },
+  backupLinkLabel: {
+    ...typography.meta,
+    color: colors.plumMuted,
   },
   brand: {
     ...typography.display,
