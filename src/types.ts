@@ -18,6 +18,11 @@ export type Item = {
   /** Epoch milliseconds. Numbers sort easily and survive JSON. */
   createdAt: number;
   updatedAt: number;
+  /**
+   * Epoch milliseconds for a local reminder, or absent when none is set.
+   * Optional so every item saved before reminders existed stays readable.
+   */
+  reminderAt?: number | null;
 };
 
 export const KIND_LABEL: Record<ItemKind, string> = {
@@ -50,6 +55,11 @@ export function isItem(value: unknown): value is Item {
     isItemKind(candidate.kind) &&
     typeof candidate.done === 'boolean' &&
     typeof candidate.createdAt === 'number' &&
-    typeof candidate.updatedAt === 'number'
+    typeof candidate.updatedAt === 'number' &&
+    (candidate.reminderAt === undefined ||
+      candidate.reminderAt === null ||
+      (typeof candidate.reminderAt === 'number' &&
+        Number.isFinite(candidate.reminderAt) &&
+        candidate.reminderAt > 0))
   );
 }
