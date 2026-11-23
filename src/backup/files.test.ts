@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { File } from 'expo-file-system';
+
 import type { Item } from '@/types';
 
 /**
@@ -26,14 +28,26 @@ const fakes = vi.hoisted(() => {
       );
     });
 
-    write = vi.fn(async (text: string) => {
-      this.contents = text;
+    write = vi.fn(async (content: string | Uint8Array) => {
+      this.contents = typeof content === 'string' ? content : new TextDecoder().decode(content);
       this.written = true;
     });
 
     text = vi.fn(async () => {
       if (this.contents === null) throw new Error('This file has no contents.');
       return this.contents;
+    });
+
+    bytes = vi.fn(async () => {
+      if (this.contents === null) throw new Error('This file has no contents.');
+      return new TextEncoder().encode(this.contents);
+    });
+
+    /** `copy` is the call that used to fail on the phone, so it must never run. */
+    copy = vi.fn(() => {
+      throw new Error(
+        'FileSystemFile.create cannot create a file under a SAF content:// URI. Use Directory.createFile instead.',
+      );
     });
 
     delete = vi.fn(() => {
@@ -81,7 +95,7 @@ vi.mock('expo-file-system', () => ({
   Directory: fakes.FakeDirectory,
 }));
 
-const { exportBackup } = await import('@/backup/files');
+const { exportBackup, saveFileToFolder } = await import('@/backup/files');
 const { backupFileName, parseBackup } = await import('@/backup/format');
 
 const NOW = 1_800_000_000_000;
@@ -183,5 +197,125 @@ describe('exportBackup: picked SAF directory', () => {
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.canceled).toBe(true);
+  });
+});
+
+const COPY_NAME = 'cuegoblin-safety-2026-11-23-101500.json';
+const COPY_TEXT = `${JSON.stringify({ format: 'cuegoblin.safety', version: 1 }, null, 2)}\n`;
+
+/** A safety copy as it sits in the app's private documents directory. */
+async function appPrivateFile(name = COPY_NAME, text = COPY_TEXT) {
+  const file = new fakes.FakeFile(`file:///documents/cuegoblin-safety/${name}`, name);
+  await file.write(text);
+  return file as unknown as File;
+}
+
+/** Makes the picked directory return a file whose `write` fails. */
+function directoryWithFailingWrite(directory: InstanceType<typeof fakes.FakeDirectory>, message: string) {
+  directory.createFile = (name: string, mimeType?: string | null) => {
+    fakes.state.createFile(name, mimeType);
+    const file = new fakes.FakeFile(`${directory.uri}/${name}`, name);
+    file.write = vi.fn(async () => {
+      throw new Error(message);
+    });
+    directory.files.push(file);
+    return file;
+  };
+}
+
+describe('saveFileToFolder: picked SAF directory', () => {
+  it('creates the file through the directory and writes the whole copy', async () => {
+    const directory = pickedDirectory();
+    const source = await appPrivateFile();
+
+    const result = await saveFileToFolder(source);
+
+    expect(result).toEqual({ ok: true, fileName: COPY_NAME });
+    expect(fakes.state.createFile).toHaveBeenCalledWith(COPY_NAME, 'application/json');
+    expect(directory.files).toHaveLength(1);
+
+    const [file] = directory.files;
+    expect(file.contents).toBe(COPY_TEXT);
+    expect(file.create).not.toHaveBeenCalled();
+    expect(source.copy).not.toHaveBeenCalled();
+  });
+
+  it('reports the name the storage provider actually used', async () => {
+    const directory = pickedDirectory();
+    const renamed = COPY_NAME.replace(/\.json$/, ' (1).json');
+    directory.createFile = (name: string, mimeType?: string | null) => {
+      fakes.state.createFile(name, mimeType);
+      const file = new fakes.FakeFile(`${directory.uri}/${renamed}`, renamed);
+      directory.files.push(file);
+      return file;
+    };
+
+    const result = await saveFileToFolder(await appPrivateFile());
+
+    expect(result).toEqual({ ok: true, fileName: renamed });
+    expect(directory.files[0].contents).toBe(COPY_TEXT);
+  });
+
+  it('reports a failure when the folder cannot create the file', async () => {
+    const directory = pickedDirectory();
+    directory.createFile = () => {
+      throw new Error('No permission to create documents in this folder');
+    };
+
+    const result = await saveFileToFolder(await appPrivateFile());
+
+    expect(result).toEqual({
+      ok: false,
+      canceled: false,
+      message:
+        `Could not create ${COPY_NAME} in that folder: No permission to create documents in this folder`,
+    });
+  });
+
+  it('discards the file when the copy cannot be written', async () => {
+    const directory = pickedDirectory();
+    directoryWithFailingWrite(directory, 'No space left on device');
+
+    const result = await saveFileToFolder(await appPrivateFile());
+
+    expect(result).toEqual({
+      ok: false,
+      canceled: false,
+      message: `Could not save ${COPY_NAME} to that folder: No space left on device`,
+    });
+    expect(directory.files[0].delete).toHaveBeenCalledTimes(1);
+    expect(directory.files[0].contents).toBeNull();
+  });
+
+  it('discards the file when it does not read back as the same bytes', async () => {
+    const directory = pickedDirectory();
+    directory.createFile = (name: string, mimeType?: string | null) => {
+      fakes.state.createFile(name, mimeType);
+      const file = new fakes.FakeFile(`${directory.uri}/${name}`, name);
+      file.bytes = vi.fn(async () => new TextEncoder().encode('{}'));
+      directory.files.push(file);
+      return file;
+    };
+
+    const result = await saveFileToFolder(await appPrivateFile());
+
+    expect(result).toEqual({
+      ok: false,
+      canceled: false,
+      message: `${COPY_NAME} was written but does not read back as the same contents, so the copy was not confirmed.`,
+    });
+    expect(directory.files[0].delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a cancelled folder pick as a cancellation, not a failure', async () => {
+    fakes.state.pickDirectoryAsync.mockRejectedValue(
+      new Error('The file picker was cancelled by the user'),
+    );
+
+    const result = await saveFileToFolder(await appPrivateFile());
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.canceled).toBe(true);
+    expect(fakes.state.createFile).not.toHaveBeenCalled();
   });
 });

@@ -41,6 +41,14 @@ function discard(file: File): void {
   }
 }
 
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 /** The folder picker has no `canceled` result; it throws instead. */
 export function isPickerCancelled(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -176,6 +184,14 @@ export async function readBackupFile(file: File): Promise<Parsed<Backup>> {
 /**
  * Copies an existing app-private file into a folder the user picks. Used to get
  * a safety copy off the device, and to save a backup out again.
+ *
+ * The same SAF rule as `exportBackup` applies: a `File` built under the picked
+ * `content://` directory cannot create itself there, so the picked directory
+ * creates the document and the bytes are written through the `File` it returns.
+ * Only JSON lives in these files, so they are created as `application/json`.
+ *
+ * The copy is only reported as a success once the bytes read back match the
+ * source; anything else is deleted rather than left looking like a good copy.
  */
 export async function saveFileToFolder(
   source: File,
@@ -183,9 +199,32 @@ export async function saveFileToFolder(
   const folder = await pickFolder();
   if (!folder.ok) return folder;
 
+  let payload: Uint8Array;
   try {
-    await source.copy(new File(folder.directory, source.name), { overwrite: false });
+    payload = await source.bytes();
   } catch (error) {
+    return {
+      ok: false,
+      canceled: false,
+      message: `Could not read ${source.name} from this phone: ${describeError(error)}`,
+    };
+  }
+
+  let file: File;
+  try {
+    file = folder.directory.createFile(source.name, BACKUP_MIME_TYPE);
+  } catch (error) {
+    return {
+      ok: false,
+      canceled: false,
+      message: `Could not create ${source.name} in that folder: ${describeError(error)}`,
+    };
+  }
+
+  try {
+    await file.write(payload);
+  } catch (error) {
+    discard(file);
     return {
       ok: false,
       canceled: false,
@@ -193,5 +232,26 @@ export async function saveFileToFolder(
     };
   }
 
-  return { ok: true, fileName: source.name };
+  let written: Uint8Array;
+  try {
+    written = await file.bytes();
+  } catch (error) {
+    discard(file);
+    return {
+      ok: false,
+      canceled: false,
+      message: `${source.name} was written but could not be read back, so the copy was not confirmed: ${describeError(error)}`,
+    };
+  }
+
+  if (!sameBytes(written, payload)) {
+    discard(file);
+    return {
+      ok: false,
+      canceled: false,
+      message: `${source.name} was written but does not read back as the same contents, so the copy was not confirmed.`,
+    };
+  }
+
+  return { ok: true, fileName: file.name };
 }
