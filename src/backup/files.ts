@@ -24,9 +24,21 @@ import {
   type Parsed,
 } from './format';
 
+const BACKUP_MIME_TYPE = 'application/json';
+
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message || error.name;
   return String(error);
+}
+
+/** Removes a file that could not be verified. A leftover half-written file is
+ * harmless, but a missing one can never be mistaken for a good backup. */
+function discard(file: File): void {
+  try {
+    file.delete();
+  } catch {
+    // Best effort only.
+  }
 }
 
 /** The folder picker has no `canceled` result; it throws instead. */
@@ -61,19 +73,37 @@ export type ExportResult =
 
 /**
  * Writes every item to a file in a folder the user picks, then checks it landed.
- * The file is only reported as exported when it exists and is not empty.
+ *
+ * The picked folder is a SAF `content://` URI on Android, where a `File` built
+ * under the directory cannot create the document itself — Expo rejects that and
+ * points at `Directory.createFile`. So the picked directory creates the file and
+ * we write through the `File` it returns. That also means the name reported back
+ * is the one the storage provider actually used, in case it renamed a collision.
+ *
+ * The export is only reported as a success once the text read back matches what
+ * was written.
  */
 export async function exportBackup(items: Item[], now: number = Date.now()): Promise<ExportResult> {
   const folder = await pickFolder();
   if (!folder.ok) return folder;
 
-  const fileName = backupFileName(now);
-  const file = new File(folder.directory, fileName);
+  const payload = `${JSON.stringify(buildBackup(items, now), null, 2)}\n`;
+
+  let file: File;
+  try {
+    file = folder.directory.createFile(backupFileName(now), BACKUP_MIME_TYPE);
+  } catch (error) {
+    return {
+      ok: false,
+      canceled: false,
+      message: `Could not create the backup file in that folder: ${describeError(error)}`,
+    };
+  }
 
   try {
-    file.create({ intermediates: true });
-    await file.write(`${JSON.stringify(buildBackup(items, now), null, 2)}\n`);
+    await file.write(payload);
   } catch (error) {
+    discard(file);
     return {
       ok: false,
       canceled: false,
@@ -81,20 +111,28 @@ export async function exportBackup(items: Item[], now: number = Date.now()): Pro
     };
   }
 
-  if (!file.exists || (file.size ?? 0) <= 0) {
-    try {
-      file.delete();
-    } catch {
-      // Best effort: a zero-byte file is harmless, just useless.
-    }
+  let written: string;
+  try {
+    written = await file.text();
+  } catch (error) {
+    discard(file);
     return {
       ok: false,
       canceled: false,
-      message: 'The backup file was written but could not be read back, so the export was not confirmed.',
+      message: `The backup file was written but could not be read back, so the export was not confirmed: ${describeError(error)}`,
     };
   }
 
-  return { ok: true, fileName, uri: file.uri };
+  if (written !== payload) {
+    discard(file);
+    return {
+      ok: false,
+      canceled: false,
+      message: 'The backup file was written but does not read back as the same contents, so the export was not confirmed.',
+    };
+  }
+
+  return { ok: true, fileName: file.name, uri: file.uri };
 }
 
 export type PickedBackup =
