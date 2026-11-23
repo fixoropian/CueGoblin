@@ -459,3 +459,33 @@ export async function cancelItemReminder(
 ): Promise<void> {
   await cancelQuietly(api, reminderNotificationId(itemId));
 }
+
+/**
+ * Identifiers currently queued in the OS. The backup screen records these in
+ * the safety copy so the file explains what the phone had pending.
+ */
+export async function listScheduledReminderIds(
+  api: NotificationsApi = Notifications,
+): Promise<string[]> {
+  const requests = await api.getAllScheduledNotificationsAsync();
+  return requests.map((request) => request.identifier);
+}
+
+/**
+ * The same cancellation, but reporting the result.
+ *
+ * Restoring items needs to know whether an old reminder is really gone: if it is
+ * not, the app must say so instead of claiming the restore was clean.
+ */
+export async function cancelItemReminderChecked(
+  itemId: string,
+  api: NotificationsApi = Notifications,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  try {
+    await api.cancelScheduledNotificationAsync(reminderNotificationId(itemId));
+    return { ok: true };
+  } catch (error) {
+    const info = logStageError('schedule', error);
+    return { ok: false, message: info.message };
+  }
+}
